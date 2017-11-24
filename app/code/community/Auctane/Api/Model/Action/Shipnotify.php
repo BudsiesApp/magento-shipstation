@@ -148,12 +148,13 @@ class Auctane_Api_Model_Action_Shipnotify
 
     protected function _getOrderItemQtys(SimpleXMLElement $xmlItems, Mage_Sales_Model_Order $order)
     {
-        $shipAll = !count((array) $xmlItems);
+        $shipAll = !count((array)$xmlItems);
         /* @var $items Mage_Sales_Model_Mysql4_Order_Item_Collection */
-        $items = $order->getItemsCollection();
-        $qtys = array();
-        $childs = array();
-        $count = 0;
+        $items  = $order->getItemsCollection();
+        $qtys   = array();
+        $count  = 0;
+        $format = '//Item/SKU[text()="%s"]/..';
+
         /* @var $item Mage_Sales_Model_Order_Item */
         foreach ($items as $item) {
             /* collect all items qtys if shipall flag is true */
@@ -168,22 +169,36 @@ class Auctane_Api_Model_Action_Shipnotify
             }
 
             // search for item by SKU
-            $sku = trim(addslashes($item->getSku()));
-            $xmlItemResult = $xmlItems->xpath(
-                sprintf('//Item/SKU[text()="%s"]/..', $sku)
-            );
-            //list($xmlItem) = $xmlItems->xpath(sprintf('//Item/SKU[text()="%s"]/..', addslashes($item->getSku())));
-            if (!empty($xmlItemResult) && isset($xmlItemResult[$count])) {
-                list($xmlItem) = $xmlItemResult[$count];
-                if ($xmlItem) {
-                    // store quantity by order item ID, not by SKU
-                    $qtys[$item->getId()] = (float) $xmlItem->Quantity;
+            $sku           = trim(addslashes($item->getSku()));
+            $xmlItemResult = $xmlItems->xpath(sprintf($format, $sku));
+
+            if (!isset($xmlItemResult[$count])) {
+                $productOptions = $item->getProductOptions();
+                if (!isset($productOptions['simple_sku'])) {
+                    $message = 'XPath not found: no_simple_sku. sku: ' . $item->getSku();
+                    $this->log($message);
+                    continue;
                 }
-                
+
+                $sku           = trim(addslashes($productOptions['simple_sku']));
+                $xmlItemResult = $xmlItems->xpath(sprintf($format, $sku));
             }
 
-            $count++;            
+            if (!isset($xmlItemResult[$count])) {
+                $message = 'XPath not found: simple_sku: ' . $sku . ', sku: ' . $item->getSku();
+                $this->log($message);
+                continue;
+            }
+
+            list($xmlItem) = $xmlItemResult[$count];
+            if ($xmlItem) {
+                // store quantity by order item ID, not by SKU
+                $qtys[$item->getId()] = (float)$xmlItem->Quantity;
+            }
+
+            $count++;
         }
+
         //Add child products into the shipments
         $intImportChildProducts = Mage::getStoreConfig('auctaneapi/general/import_child_products');
         if ($intImportChildProducts == 2) {
@@ -230,6 +245,22 @@ class Auctane_Api_Model_Action_Shipnotify
                 ->save();
 
         return $shipment;
+    }
+
+    private function log($message)
+    {
+        //log raw XML for debug
+        Mage::log(
+            file_get_contents('php://input'),
+            Zend_Log::DEBUG,
+            'shipstation_xml_request.log'
+        );
+
+        Mage::log(
+            $message,
+            Zend_Log::DEBUG,
+            'shipstation_xml_request.log'
+        );
     }
 
 }
