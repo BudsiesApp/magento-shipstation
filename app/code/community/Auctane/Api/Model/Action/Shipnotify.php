@@ -151,8 +151,7 @@ class Auctane_Api_Model_Action_Shipnotify
         $shipAll = !count((array)$xmlItems);
         /* @var $items Mage_Sales_Model_Mysql4_Order_Item_Collection */
         $items  = $order->getItemsCollection();
-        $qtys   = array();
-        $count  = 0;
+        $qtys   = [];
         $format = '//Item/SKU[text()="%s"]/..';
 
         /* @var $item Mage_Sales_Model_Order_Item */
@@ -168,11 +167,15 @@ class Auctane_Api_Model_Action_Shipnotify
                 continue;
             }
 
+            if ($item->getParentItemId()) {
+                continue;
+            }
+
             // search for item by SKU
             $sku           = trim(addslashes($item->getSku()));
             $xmlItemResult = $xmlItems->xpath(sprintf($format, $sku));
 
-            if (!isset($xmlItemResult[$count])) {
+            if (empty($xmlItemResult)) {
                 $productOptions = $item->getProductOptions();
                 if (!isset($productOptions['simple_sku'])) {
                     $message = 'XPath not found: no_simple_sku. sku: ' . $item->getSku();
@@ -184,44 +187,43 @@ class Auctane_Api_Model_Action_Shipnotify
                 $xmlItemResult = $xmlItems->xpath(sprintf($format, $sku));
             }
 
-            if (!isset($xmlItemResult[$count])) {
+            if (empty($xmlItemResult)) {
                 $message = 'XPath not found: simple_sku: ' . $sku . ', sku: ' . $item->getSku();
                 $this->log($message);
                 continue;
             }
 
-            list($xmlItem) = $xmlItemResult[$count];
+            list($xmlItem) = $xmlItemResult;
             if ($xmlItem) {
                 // store quantity by order item ID, not by SKU
                 $qtys[$item->getId()] = (float)$xmlItem->Quantity;
             }
-
-            $count++;
         }
 
         //Add child products into the shipments
-        $intImportChildProducts = Mage::getStoreConfig('auctaneapi/general/import_child_products');
+        $intImportChildProducts = (int)Mage::getStoreConfig('auctaneapi/general/import_child_products');
         if ($intImportChildProducts == 2) {
-            $orderItems = $order->getAllItems();
-            foreach ($orderItems as $objItem) {
-                if ($objItem->getParentItemId()) {
-                    //set parent item if not set
-                    if (!$objItem->getParentItem()) {
-                        $objItem->setParentItem(Mage::getModel('sales/order_item')->load($objItem->getParentItemId()));
-                    }
+            return $qtys;
+        }
 
-                    if ($objItem->getParentItem()) {
-                        //check for the bundle product type	
-                        if ($objItem->getParentItem()->getProductType() === 'bundle') {
-                            $qtys[$objItem->getItemId()] = $qtys[$objItem->getParentItemId()];
-                        }
-
-                    }
-
-                }
-
+        $orderItems = $order->getAllItems();
+        foreach ($orderItems as $objItem) {
+            if (!$objItem->getParentItemId()) {
+                continue;
+            }
+            //set parent item if not set
+            if (!$objItem->getParentItem()) {
+                $objItem->setParentItem(Mage::getModel('sales/order_item')->load($objItem->getParentItemId()));
             }
 
+            if ($objItem->getParentItem()->isObjectNew()) {
+                continue;
+            }
+
+            //check for the bundle product type
+            if (in_array($objItem->getParentItem()->getProductType(), ['bundle', 'configurable'])) {
+                $qtys[$objItem->getItemId()] = $qtys[$objItem->getParentItemId()];
+            }
         }
 
         return $qtys;
